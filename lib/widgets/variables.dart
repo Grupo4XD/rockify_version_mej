@@ -20,8 +20,7 @@ class Variables {
     backgroundColor: Variables.fondoBotones,
   );
 
-  // ignore: non_constant_identifier_names
-  static AppBar MiAppbar = AppBar(
+  static final AppBar MiAppbar = AppBar(
     backgroundColor: Colors.transparent, // Hace el AppBar transparente
     elevation: 0, // Elimina la sombra del AppBar
     title: Row(

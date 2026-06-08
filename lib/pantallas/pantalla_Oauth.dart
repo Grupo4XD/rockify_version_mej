@@ -8,7 +8,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-
 class PantallaOauth extends StatefulWidget {
   const PantallaOauth({super.key});
 
@@ -22,12 +21,20 @@ class _PantallaOauthState extends State<PantallaOauth> {
   String? error_autenticacion;
 
   Future<void> _procesarToken(String codigoAutorizacion) async {
-    String? tokencito = await canjearCodigoPorToken(codigoAutorizacion);
+    Map<String, dynamic>? resultado = await canjearCodigoPorToken(
+      codigoAutorizacion,
+    );
 
-    if (tokencito != null && mounted) {
+    if (resultado != null && mounted) {
+      String tokencito = resultado['token']!;
+      String codigoDeLaSala = resultado['codigoSala']!;
+
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => PantallaSala(token: tokencito)),
+        MaterialPageRoute(
+          builder: (context) =>
+              PantallaSala(token: tokencito, codigoSala: codigoDeLaSala),
+        ),
       );
     } else {
       setState(() {
@@ -38,7 +45,9 @@ class _PantallaOauthState extends State<PantallaOauth> {
   }
 
   // Cambiamos el retorno a Future<String?> por si ocurre un error
-  Future<String?> canjearCodigoPorToken(String codigoAutorizacion) async {
+  Future<Map<String, dynamic>?> canjearCodigoPorToken(
+    String codigoAutorizacion,
+  ) async {
     final String urlSpotify = 'https://accounts.spotify.com/api/token';
     final String clientId = 'cf4410e8df834a21998c3fe4d6518987';
     final String clientSecret = 'eb34c8686e6044b9b6a2fcc6b37e9bb1';
@@ -81,8 +90,9 @@ class _PantallaOauthState extends State<PantallaOauth> {
               'usuarios_en_linea': 1,
               'creado_en': FieldValue.serverTimestamp(),
             });
+
         print("✅ Sala creada en Firestore");
-        return token;
+        return {"token": token, "codigoSala": codigoSala};
       } else {
         print("Error de autenticacion");
         return null;
