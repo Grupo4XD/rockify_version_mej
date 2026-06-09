@@ -4,8 +4,9 @@ import 'dart:convert';
 class Peticionesapi {
   //1. Obtener la cancion actual
   // ignore: non_constant_identifier_names
-  static Future<Map<String, dynamic>?> ObtenerCancionActual(String token) async {
-
+  static Future<Map<String, dynamic>?> ObtenerCancionActual(
+    String token,
+  ) async {
     final Uri url = Uri.parse(
       'https://api.spotify.com/v1/me/player/currently-playing',
     );
@@ -18,12 +19,12 @@ class Peticionesapi {
           'Content-Type': 'application/json',
         },
       );
-
+      if (respuesta.statusCode == 204) return null;
       // Spotify regresa 200 si hay música sonando, o 204 si el reproductor está pausado/vacío
       if (respuesta.statusCode == 200) {
-        return jsonDecode(respuesta.body) as Map<String, dynamic>;
+        return jsonDecode(respuesta.body)['item'];
       }
-      return null;
+      
     } catch (e) {
       print("Error al obtener la cancion actual $e");
       return null;

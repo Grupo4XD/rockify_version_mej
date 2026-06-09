@@ -20,6 +20,10 @@ class Variables {
     backgroundColor: Variables.fondoBotones,
   );
 
+
+
+  //El appBar
+
   static final AppBar MiAppbar = AppBar(
     backgroundColor: Colors.transparent, // Hace el AppBar transparente
     elevation: 0, // Elimina la sombra del AppBar
