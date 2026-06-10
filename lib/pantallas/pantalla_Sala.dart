@@ -1,9 +1,13 @@
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:proyecto_rockify/pantallas/pantalla_Inicio.dart';
 import 'package:proyecto_rockify/widgets/variables.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:async'; // Para usar Timer
 import 'package:proyecto_rockify/pantallas/peticionesApi.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:proyecto_rockify/firebase_options.dart';
 
 class PantallaSala extends StatefulWidget {
   final String codigoSala;
@@ -19,53 +23,168 @@ class PantallaSala extends StatefulWidget {
 }
 
 class _PantallaSalaState extends State<PantallaSala> {
-  // Variable para contar los dislikes de la canción que está sonando actualmente
-
   bool dislikePresionado = false;
   int dislikesCancionActual = 0;
-  double progresoCancion = 0.3;
-  //########## VARIABLES PARAEL CENTRO DE LA CANCION ###############
+  double progresoCancion = 0.0;
 
+  // ── VARIABLES DEL REPRODUCTOR CENTRAL ──────────────────────────────
   String imagen = "https://picsum.photos/250";
-  String titulo = "Ninguna cancion sonando";
-  String artista = "Abre spotify en tu navegador";
-  String mensajeCola = "La cola esta vacia, Añade canciones!";
+  String titulo = "Ninguna canción sonando";
+  String artista = "Abre Spotify en tu navegador";
 
-  // Tu lista de reproducción actual. El elemento [0] siempre es el que suena ahora.
-  final List<Map<String, dynamic>> listaColaEspera = [];
+  // ── USUARIOS EN LÍNEA (tiempo real desde Firestore) ─────────────────
+  int usuariosEnLinea = 1;
+  StreamSubscription<DocumentSnapshot>? _streamUsuarios;
 
-  //Se pone dentro de la clase
+  // ── LISTA DE COLA ───────────────────────────────────────────────────
+  // Cada elemento tiene: { 'titulo': ..., 'artista': ..., 'imagen': ... }
+  List<Map<String, dynamic>> listaColaEspera = [];
+
+  Timer? _timer;
+
+  // ────────────────────────────────────────────────────────────────────
+  // FUNCIÓN QUE HACE AMBAS PETICIONES Y ACTUALIZA EL ESTADO
+  // ────────────────────────────────────────────────────────────────────
+  Future<void> _actualizarReproductor() async {
+    // 1. Canción actual
+    final Map<String, dynamic>? datosCancion =
+        await Peticionesapi.ObtenerCancionActual(widget.token);
+
+    // 2. Cola de reproducción
+    final Map<String, dynamic>? datosCola =
+        await Peticionesapi.obtenerColaReproduccion(widget.token);
+
+    // Solo actualiza la UI si el widget sigue montado (el usuario no salió)
+    if (!mounted) return;
+
+    setState(() {
+      // ── Actualizar reproductor central ──────────────────────────────
+      if (datosCancion != null) {
+        titulo = datosCancion['item']['name'] ?? 'Sin título';
+
+        // Los artistas vienen como lista; los unimos con coma
+        final artistas = datosCancion['item']['artists'] as List<dynamic>?;
+        artista = artistas != null
+            ? artistas.map((a) => a['name']).join(', ')
+            : 'Desconocido';
+
+        // La imagen viene dentro de album -> images -> [0] -> url
+        final imagenes =
+            datosCancion['item']['album']?['images'] as List<dynamic>?;
+        imagen = (imagenes != null && imagenes.isNotEmpty)
+            ? imagenes[0]['url']
+            : 'https://picsum.photos/250';
+
+        // Progreso: progress_ms / duration_ms  (estos vienen en el objeto
+        // raíz del currently-playing, pero ObtenerCancionActual devuelve
+        // solo el 'item'. Por ahora dejamos progreso en 0; lo ampliaremos
+        // cuando ajustes la API para devolver también progress_ms)
+        int progresoMs = datosCancion['progress_ms'] ?? 0;
+        int duracionMs = datosCancion['item']['duration_ms'] ?? 1;
+
+        progresoCancion = progresoMs / duracionMs;
+      } else {
+        print("Ha ocurrido un error");
+        titulo = "Ninguna canción sonando";
+        artista = "Abre Spotify en tu navegador";
+        imagen = "https://picsum.photos/250";
+        progresoCancion = 0.0;
+      }
+
+      // ── Actualizar cola ─────────────────────────────────────────────
+      if (datosCola != null) {
+        final queue = datosCola['queue'] as List<dynamic>?;
+        if (queue != null && queue.isNotEmpty) {
+          listaColaEspera = queue.map((item) {
+            final artistas = item['artists'] as List<dynamic>?;
+            final imagenes = item['album']?['images'] as List<dynamic>?;
+            return {
+              'titulo': item['name'] ?? 'Sin título',
+              'artista': artistas != null
+                  ? artistas.map((a) => a['name']).join(', ')
+                  : 'Desconocido',
+              'imagen': (imagenes != null && imagenes.isNotEmpty)
+                  ? imagenes[0]['url']
+                  : '',
+            };
+          }).toList();
+        } else {
+          listaColaEspera = [];
+        }
+      } else {
+        listaColaEspera = [];
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
 
-    // Iniciamos todo el flujo automático secuencial
-    Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (!mounted) {
-        timer.cancel(); // Si el usuario sale de la sala, apaga el temporizador
-      } else {
-        print("La lista $listaColaEspera");
-        setState(() {
-          //listaColaEspera.removeAt(0);
-        });
-      }
+    // Primera carga inmediata para no esperar los 3 segundos
+    _actualizarReproductor();
+
+    // Luego se repite cada 3 segundos
+    _timer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      _actualizarReproductor();
     });
+
+    // Stream en tiempo real de usuarios_en_linea desde Firestore
+    _streamUsuarios = FirebaseFirestore.instance
+        .collection('salas')
+        .doc(widget.codigoSala)
+        .snapshots()
+        .listen((snapshot) {
+          if (snapshot.exists && mounted) {
+            setState(() {
+              usuariosEnLinea = snapshot.data()?['usuarios_en_linea'] ?? 1;
+            });
+          }
+        });
+  }
+
+  // ── CERRAR SALA: borra el doc de Firestore y vuelve a PantallaInicio ─
+  Future<void> _cerrarSala() async {
+    _timer?.cancel();
+    _streamUsuarios?.cancel();
+
+    // Borra el documento de la sala en Firestore
+    await FirebaseFirestore.instance
+        .collection('salas')
+        .doc(widget.codigoSala)
+        .delete();
+
+    if (!mounted) return;
+
+    // Navega a PantallaInicio limpiando todo el stack de navegación
+    //Elimina todas las pantallas del stack
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => PantallaInicio()),
+      (route) => false, // Elimina todas las pantallas anteriores
+    );
+  }
+
+  @override
+  void dispose() {
+    // Cancelar el timer cuando el widget se destruye (usuario sale de la sala)
+    _timer?.cancel();
+    _streamUsuarios?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Variables.fondoInferior,
-
       appBar: AppBar(
         automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
-        //Centra el titulo al centro sin importar que hayga iconos a lado
         centerTitle: true,
         title: Center(
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.center, //Alinea en vertical
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
                 Icons.music_note,
@@ -86,15 +205,44 @@ class _PantallaSalaState extends State<PantallaSala> {
         ),
       ),
 
+      //###################### BUSCADOR ##################
       body: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
         child: Column(
           children: [
+            TextField(
+              style: GoogleFonts.comfortaa(
+                color: Variables.textos_primarios,
+                fontSize: 15
+              ),
+              decoration: InputDecoration(
+                hintText: "Ingresa una cancion",
+                prefixIcon: Icon(Icons.search,color: Variables.textos_primarios,),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(25),
+        
+
+                ),
+                //Cuando esta inactivo
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(25),
+                  borderSide: BorderSide(color: Variables.textos_primarios.withOpacity(0.4))
+                ),
+                //Cuando esta activo
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(25),
+                  borderSide: BorderSide(color: Variables.textos_primarios,width: 2),
+                  
+                )
+
+
+              ),
+              
+            ),
             Padding(
-              padding: const EdgeInsets.only(bottom: 15),
+              padding: const EdgeInsets.only(top: 15, bottom: 15),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-
                 children: [
                   SizedBox(
                     height: 40,
@@ -103,7 +251,10 @@ class _PantallaSalaState extends State<PantallaSala> {
                       style: Variables.estiloBotones,
                       child: Padding(
                         padding: const EdgeInsets.all(10),
-                        child: Text("ID: 6521", style: TextStyle(fontSize: 18)),
+                        child: Text(
+                          "ID: ${widget.codigoSala}",
+                          style: const TextStyle(fontSize: 18),
+                        ),
                       ),
                     ),
                   ),
@@ -112,15 +263,19 @@ class _PantallaSalaState extends State<PantallaSala> {
                     child: ElevatedButton.icon(
                       onPressed: () {},
                       style: Variables.estiloBotones,
-                      icon: Icon(Icons.person),
-                      label: Text("2", style: TextStyle(fontSize: 18)),
+                      icon: const Icon(Icons.person),
+                      label: Text(
+                        "$usuariosEnLinea",
+                        style: TextStyle(fontSize: 18),
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
+
             // ============================================================
-            // BLOQUE 1: REPRODUCTOR ACTUAL (AHORA TOTALMENTE LIMPIO)
+            // BLOQUE 1: REPRODUCTOR ACTUAL
             // ============================================================
             Container(
               padding: const EdgeInsets.all(15),
@@ -130,38 +285,45 @@ class _PantallaSalaState extends State<PantallaSala> {
               ),
               child: Column(
                 children: [
-                  // Imagen/Portada de la canción
+                  // Portada de la canción
                   ClipRRect(
                     borderRadius: BorderRadius.circular(16),
                     child: Container(
                       width: 180,
                       height: 180,
                       color: Colors.grey[900],
-                      child: Image.network(imagen),
+                      child: Image.network(
+                        imagen,
+                        fit: BoxFit.cover,
+                        // Si la imagen falla, muestra un icono
+                        errorBuilder: (_, __, ___) => const Icon(
+                          Icons.album,
+                          color: Colors.white54,
+                          size: 80,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 16),
 
-                  // Título actual limpio sin botones estorbando
+                  // Título
                   Text(
-                    titulo, // Muestra el título de la primera canción
+                    titulo,
                     style: GoogleFonts.comfortaa(
                       color: Colors.white,
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
                     ),
                     textAlign: TextAlign.center,
-                    //En caso de desborde del widget
                     maxLines: 1,
-                    //La propiedad overflow indica si hay un desborde muestre ... puntos para no aparecer las lineas negras y amarillas
                     overflow: TextOverflow.ellipsis,
                   ),
 
                   const SizedBox(height: 4),
 
-                  // Artista actual limpio
+                  // Artista
                   Text(
-                    artista, // Muestra el artista de la primera canción
+                    artista,
                     style: GoogleFonts.comfortaa(
                       color: Colors.grey,
                       fontSize: 15,
@@ -200,7 +362,7 @@ class _PantallaSalaState extends State<PantallaSala> {
             ),
 
             // ============================================================
-            // BLOQUE 2: LISTA CON FOCO EN LA PRIMERA CANCIÓN Y SU DISLIKE
+            // BLOQUE 2: COLA DE CANCIONES
             // ============================================================
             Expanded(
               child: Container(
@@ -211,7 +373,7 @@ class _PantallaSalaState extends State<PantallaSala> {
                 child: listaColaEspera.isEmpty
                     ? Center(
                         child: Text(
-                          "La cola esta vacia, añade canciones!",
+                          "La cola está vacía, ¡añade canciones!",
                           style: GoogleFonts.comfortaa(
                             color: Variables.textos_primarios.withOpacity(0.4),
                             fontWeight: FontWeight.bold,
@@ -221,10 +383,8 @@ class _PantallaSalaState extends State<PantallaSala> {
                     : ListView.builder(
                         itemCount: listaColaEspera.length,
                         itemBuilder: (context, index) {
-                          final cancion = listaColaEspera[index];
-
-                          // 🔥 EL TRUCO: ¿Es la primera canción (la que está sonando)?
-                          bool esLaQueEstaSonando = (index == 0);
+                          final cancionCola = listaColaEspera[index];
+                          final bool esLaQueEstaSonando = (index == 0);
 
                           return Container(
                             margin: const EdgeInsets.symmetric(
@@ -246,34 +406,21 @@ class _PantallaSalaState extends State<PantallaSala> {
                                   : null,
                             ),
                             child: ListTile(
-                              // 🔥 CAMBIO AQUÍ: Quitamos el número y volvemos a poner el icono/imagen de la canción
                               leading: ClipRRect(
-                                borderRadius: BorderRadius.circular(
-                                  8,
-                                ), // Bordes suavemente redondeados para la miniatura
-                                child: Container(
-                                  width: 45,
-                                  height: 45,
-                                  color: esLaQueEstaSonando
-                                      ? const Color(0xFF00FFCC).withOpacity(
-                                          0.1,
-                                        ) // Fondo cian sutil si suena
-                                      : Colors.white.withOpacity(
-                                          0.05,
-                                        ), // Fondo gris sutil si está en espera
-                                  child: Icon(
-                                    Icons.music_note,
-                                    // Si es la que está sonando, el icono brilla en cian; si no, se queda gris
-                                    color: esLaQueEstaSonando
-                                        ? const Color(0xFF00FFCC)
-                                        : Colors.white54,
-                                    size: 24,
-                                  ),
-                                ),
+                                borderRadius: BorderRadius.circular(8),
+                                child: cancionCola['imagen'] != ''
+                                    ? Image.network(
+                                        cancionCola['imagen'],
+                                        width: 45,
+                                        height: 45,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, _, _) =>
+                                            _iconoMusica(esLaQueEstaSonando),
+                                      )
+                                    : _iconoMusica(esLaQueEstaSonando),
                               ),
-
                               title: Text(
-                                cancion['titulo'],
+                                cancionCola['titulo'],
                                 style: GoogleFonts.comfortaa(
                                   color: esLaQueEstaSonando
                                       ? Colors.white
@@ -284,13 +431,11 @@ class _PantallaSalaState extends State<PantallaSala> {
                                 ),
                               ),
                               subtitle: Text(
-                                cancion['artista'],
+                                cancionCola['artista'],
                                 style: GoogleFonts.comfortaa(
                                   color: Colors.grey,
                                 ),
                               ),
-
-                              //El trailing sirve para poner un elemento a la parte derecha final del list tile
                               trailing: esLaQueEstaSonando
                                   ? Row(
                                       mainAxisSize: MainAxisSize.min,
@@ -302,12 +447,10 @@ class _PantallaSalaState extends State<PantallaSala> {
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
-
                                         IconButton(
-                                          icon: Icon(
+                                          icon: const Icon(
                                             Icons.thumb_down,
                                             color: Colors.red,
-
                                             size: 22,
                                           ),
                                           onPressed: () {
@@ -343,7 +486,6 @@ class _PantallaSalaState extends State<PantallaSala> {
                     borderRadius: BorderRadius.circular(34),
                   ),
                 ),
-
                 label: Text(
                   "Cerrar Sala",
                   style: GoogleFonts.comfortaa(
@@ -351,11 +493,34 @@ class _PantallaSalaState extends State<PantallaSala> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                onPressed: () => exit(0),
+                onPressed: () async {
+                  await FirebaseFirestore.instance
+                      .collection('salas')
+                      .doc(widget.codigoSala)
+                      .delete(); // Borra la sala de Firebase al salir
+                  // Regresa a la pantalla anterior (login)
+                  _cerrarSala();
+                },
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // Widget auxiliar para el icono de música en la lista
+  Widget _iconoMusica(bool destacado) {
+    return Container(
+      width: 45,
+      height: 45,
+      color: destacado
+          ? const Color(0xFF00FFCC).withOpacity(0.1)
+          : Colors.white.withOpacity(0.05),
+      child: Icon(
+        Icons.music_note,
+        color: destacado ? const Color(0xFF00FFCC) : Colors.white54,
+        size: 24,
       ),
     );
   }

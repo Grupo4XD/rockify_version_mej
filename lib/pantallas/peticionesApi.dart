@@ -22,7 +22,7 @@ class Peticionesapi {
       if (respuesta.statusCode == 204) return null;
       // Spotify regresa 200 si hay música sonando, o 204 si el reproductor está pausado/vacío
       if (respuesta.statusCode == 200) {
-        return jsonDecode(respuesta.body)['item'];
+        return jsonDecode(respuesta.body);
       }
       
     } catch (e) {
