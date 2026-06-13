@@ -19,12 +19,12 @@ class Peticionesapi {
           'Content-Type': 'application/json',
         },
       );
+      
       if (respuesta.statusCode == 204) return null;
       // Spotify regresa 200 si hay música sonando, o 204 si el reproductor está pausado/vacío
       if (respuesta.statusCode == 200) {
         return jsonDecode(respuesta.body);
       }
-      
     } catch (e) {
       print("Error al obtener la cancion actual $e");
       return null;
@@ -57,7 +57,7 @@ class Peticionesapi {
     String token,
     String uriCancion,
   ) async {
-    // Spotify pide la URI como un parámetro de consulta (Query Parameter)
+    // Acoplamos el parámetro ?uri= al final de la URL usando el identificador de la canción
     final url = Uri.parse(
       'https://api.spotify.com/v1/me/player/queue?uri=$uriCancion',
     );
@@ -89,6 +89,39 @@ class Peticionesapi {
     } catch (e) {
       print("Error al dar Next: $e");
       return false;
+    }
+  }
+
+  // 5. Buscar canciones en Spotify
+  static Future<List<dynamic>?> buscarCanciones(
+    String token,
+    String query,
+  ) async {
+    // Reemplazamos los espacios del texto por %20 para que sea una URL válida
+    final String queryFormateado = Uri.encodeComponent(query);
+
+    // Armamos la URL indicando que buscamos "track" (canciones) y con un límite de 10 resultados
+    final url = Uri.parse(
+      'https://api.spotify.com/v1/search?q=$queryFormateado&type=track&limit=10',
+    );
+
+    try {
+      final respuesta = await http.get(
+        url,
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (respuesta.statusCode == 200) {
+        final datosDecodificados = jsonDecode(respuesta.body);
+        // Spotify devuelve un objeto "tracks", y dentro de este, una lista "items"
+        return datosDecodificados['tracks']['items'] as List<dynamic>;
+      } else {
+        print("Error en la búsqueda. Código: ${respuesta.statusCode}");
+        return null;
+      }
+    } catch (e) {
+      print("Excepción al buscar canción: $e");
+      return null;
     }
   }
 }
